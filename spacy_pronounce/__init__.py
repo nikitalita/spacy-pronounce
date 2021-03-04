@@ -59,15 +59,8 @@ class SpacyPronounce:
                                'UW0', 'UW1', 'UW2']
         lang = lang or nlp.lang
         lang, *country_code = lang.lower().replace("-", "_").split("_")
-        if country_code:
-            country_code = country_code[0].upper()
-            lang = f"{lang}_{country_code}"
-        elif lang == "en":
-            lang = "en_US"
-        elif lang == "de":
-            lang = "de_DE"
-        elif lang == "pt":
-            lang = "pt_PT"
+        if lang != "en":
+            raise Exception("spacy_pronounce is only currently implemented for english")
 
         try:
             self.syllable_dic = pyphen.Pyphen(lang=lang)
@@ -93,12 +86,12 @@ class SpacyPronounce:
         word = normalize_numbers(word)
         word = ''.join(char for char in unicodedata.normalize('NFD', word)
                        if unicodedata.category(char) != 'Mn')  # Strip accents
-        # handle acronyms
         word = word.replace(".", "")
         word = word.replace("-", "")
         word = word.replace("?", "")
         word = word.replace("!", "")
         word = word.replace("$", "")
+        # handle acronyms
         if word.isupper():
             word = '.'.join([ch for ch in word])
             word += '.'
@@ -144,10 +137,21 @@ class SpacyPronounce:
                         phoneme = pron[pronidx]
                         if self.vowel_phonemes.__contains__(phoneme):
                             vowels += 1
+                        # If a consonant phoneme and the syllable does not contain it
+                        else:
+                            if vowels == 1:
+                                consonant = phoneme[0].lower()
+                                if consonant == "k" and not (syl.__contains__("k") or syl.__contains__("c")):
+                                    break
+                                elif consonant == "z" and not (syl.__contains__("z") or syl.__contains__("s")):
+                                    break
+                                elif not syl.__contains__(consonant):
+                                    break
                         if vowels > 1:
                             break
                         sylpron.append(phoneme)
                         pronidx += 1
+                    # append the rest to the last syllable if we missed some
                     if syllables.index(syl) == len(syllables) - 1 and pronidx < len(pron):
                         length = len(pron) - pronidx;
                         for i in range(pronidx, pronidx + length):
