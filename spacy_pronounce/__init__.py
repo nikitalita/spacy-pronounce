@@ -11,15 +11,16 @@ import unicodedata
 
 @Language.factory("graphemes",
                   assigns=["token._.graphemes"],
-                  default_config={"lang": None},
+                  default_config={"lang": None, "consonant_dupe": True},
                   requires=["token.text", "token.pos"]
                   )
 def make_spacy_pronounce(
         nlp: Language,
         name: str,
-        lang: Optional[str]
+        lang: Optional[str],
+        consonant_dupe: bool
 ):
-    return SpacyPronounce(nlp, name, lang=lang)
+    return SpacyPronounce(nlp, name, lang=lang, consonant_dupe=consonant_dupe)
 
 
 class Graphemes:
@@ -34,7 +35,7 @@ class Graphemes:
 
 
 class SpacyPronounce:
-    def __init__(self, nlp: Language, name: str = "graphemes", lang: Optional[str] = None):
+    def __init__(self, nlp: Language, name: str = "graphemes", lang: Optional[str] = None, consonant_dupe: bool = True):
 
         """
         nlp: an instance of spacy
@@ -48,7 +49,7 @@ class SpacyPronounce:
         self.name = name
         self.g2p = G2p()
         self.cmu = cmudict.dict()
-
+        self.consonant_dupe = consonant_dupe
         self.vowel_phonemes = ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
                                'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
                                'EH0', 'EH1', 'EH2', 'ER0', 'ER1', 'ER2', 'EY0', 'EY1',
@@ -57,6 +58,7 @@ class SpacyPronounce:
                                'OW2', 'OY0', 'OY1', 'OY2',
                                'UH0', 'UH1', 'UH2', 'UW',
                                'UW0', 'UW1', 'UW2']
+        self.consonants = "bcdfghjklmnpqrstvwxyz"
         lang = lang or nlp.lang
         lang, *country_code = lang.lower().replace("-", "_").split("_")
         if lang != "en":
@@ -87,6 +89,7 @@ class SpacyPronounce:
         word = ''.join(char for char in unicodedata.normalize('NFD', word)
                        if unicodedata.category(char) != 'Mn')  # Strip accents
         word = word.replace(".", "")
+        word = word.replace(",", "")
         word = word.replace("-", "")
         word = word.replace("?", "")
         word = word.replace("!", "")
@@ -107,8 +110,10 @@ class SpacyPronounce:
         word = self.normalize_word(token.text)
         print(word)
 
-        pos = token.pos
-        pron = None
+        pos = token.tag_
+
+        if word == "":
+            return graphemes
         if word in self.g2p.homograph2features:  # Check homograph
             pron1, pron2, pos1 = self.g2p.homograph2features[word]
             if pos.startswith(pos1):
@@ -130,23 +135,39 @@ class SpacyPronounce:
                 sylprons = dict()
                 pronidx = 0
                 syllables: Optional[List[str]] = token._.syllables
-                for syl in syllables:
+
+                for sylidx in range(len(syllables)):
+                    syl = syllables[sylidx]
                     vowels = 0
                     sylpron = []
                     while pronidx < len(pron):
                         phoneme = pron[pronidx]
+                        syl_first_letter = syl[0].lower()
+                        phoneme_first_letter = phoneme[0].lower()
+
                         if self.vowel_phonemes.__contains__(phoneme):
                             vowels += 1
-                        # If a consonant phoneme and the syllable does not contain it
+
+                        # If a consonant phoneme and the syllable does not contain it, skip
                         else:
+                            consonant = phoneme[0].lower()
                             if vowels == 1:
-                                consonant = phoneme[0].lower()
-                                if consonant == "k" and not (syl.__contains__("k") or syl.__contains__("c")):
+                                if consonant == "k" and not (syl.lower().__contains__("k") or syl.lower().__contains__("c")):
                                     break
-                                elif consonant == "z" and not (syl.__contains__("z") or syl.__contains__("s")):
+                                elif consonant == "z" and not (syl.lower().__contains__("z") or syl.lower().__contains__("s")):
                                     break
-                                elif not syl.__contains__(consonant):
+                                elif not syl.lower().__contains__(consonant):
                                     break
+
+                        # get the consonant phoneme from the last syllable if necessary
+                        if self.consonant_dupe and len(sylpron) == 0 and sylidx > 0 \
+                                and syl_first_letter != phoneme_first_letter \
+                                and self.consonants.__contains__(syl_first_letter):
+                            last_pron = sylprons[syllables[sylidx - 1]]
+                            last_phoneme = last_pron[len(last_pron) - 1]
+                            if last_phoneme[0].lower() == syl_first_letter:
+                                sylpron.append(last_phoneme)
+
                         if vowels > 1:
                             break
                         sylpron.append(phoneme)
