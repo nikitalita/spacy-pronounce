@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-from typing import Optional, List
+from typing import Optional, Any
 from spacy.tokens import Token, Doc
 from spacy.language import Language
 import pyphen
 import cmudict
 from .g2p_en.expand import normalize_numbers
 from .g2p_en.g2p import G2p
+from .g2p_en.data.contractions import ENGLISH_CONTRACTIONS
+
 import unicodedata
 
 
@@ -16,7 +18,9 @@ import unicodedata
                       "syllable_grouping": True,
                       "consonant_dupe": True,
                       "sound_out_acronyms": False,
-                      "pronounce_punctuation": False},
+                      "pronounce_punctuation": False,
+                      "fix_split_contractions": True
+                  },
                   requires=["token.text", "token.pos"],
 
                   )
@@ -27,14 +31,17 @@ def make_spacy_pronounce(
         syllable_grouping: bool,
         consonant_dupe: bool,
         sound_out_acronyms: bool,
-        pronounce_punctuation: bool
+        pronounce_punctuation: bool,
+        fix_split_contractions: bool
 ):
     return SpacyPronounce(nlp, name,
                           lang=lang,
                           syllable_grouping=syllable_grouping,
                           consonant_dupe=consonant_dupe,
                           sound_out_acronyms=sound_out_acronyms,
-                          pronounce_punctuation=pronounce_punctuation)
+                          pronounce_punctuation=pronounce_punctuation,
+                          fix_split_contractions= fix_split_contractions
+                          )
 
 
 class Graphemes:
@@ -47,6 +54,10 @@ class Graphemes:
          grapheme]
     """
 
+
+class FakeToken(object):
+    def __init__(self):
+        pass
 
 class SpacyPronounce:
     def __init__(self, nlp: Language, name: str = "phonemes",
@@ -99,10 +110,12 @@ class SpacyPronounce:
             return self.syllable_dic.inserted(word.lower()).split("-")
         return None
 
-    def is_acronym(self, word: str) -> bool:
+    @staticmethod
+    def is_acronym(word: str) -> bool:
         return len(word) != 1 and word.strip('.').isupper()
 
-    def normalize_word(self, word: str) -> str:
+    @staticmethod
+    def normalize_word(word: str) -> str:
         word = normalize_numbers(word)
         word = ''.join(char for char in unicodedata.normalize('NFD', word)
                        if unicodedata.category(char) != 'Mn')  # Strip accents
@@ -128,7 +141,7 @@ class SpacyPronounce:
             sylprons[token._.syllables[0]] = pron
             return sylprons
         pronidx = 0
-        syllables: Optional[List[str]] = token._.syllables
+        syllables: Optional[list[str]] = token._.syllables
 
         for sylidx in range(len(syllables)):
             syl = syllables[sylidx]
@@ -178,7 +191,7 @@ class SpacyPronounce:
             sylprons[syl] = sylpron
         return sylprons
 
-    def get_pronounciation(self, token: Token) -> object:
+    def get_pronunciation(self, token: Token or FakeToken) -> object:
 
         phonemes = dict()
         phonemes["whole_word"] = None
@@ -219,7 +232,7 @@ class SpacyPronounce:
         else:  # predict for oov
             pron = self.g2p.predict(word)
         phonemes["whole_word"] = pron
-        if self.syllable_grouping:
+        if self.syllable_grouping or token.pos_ == "CONTRACTION":
             phonemes["syllables"] = self.group_syllables(token, pron)
         return phonemes
 
@@ -231,12 +244,63 @@ class SpacyPronounce:
                 token._.set("syllables_count", len(syllables))
 
     def __call__(self, doc: Doc):
-        for tokenIdx in range(len(doc)):
-            token: Token
-            token = doc[tokenIdx]
+        tokenIdx = 0
+        while tokenIdx < len(doc):
+            token: Token = doc[tokenIdx]
+            # disabled for now
+            self.fix_contractions = True
+            if self.fix_contractions and tokenIdx < len(doc) - 1 and doc[tokenIdx+1].text.__contains__("'"):
+                skip = self.handle_contraction(tokenIdx, doc)
+                if skip > 0:
+                    tokenIdx += skip
+                    continue
 
             self.set_syllables(token)
-            phonemes = self.get_pronounciation(token)
+            phonemes = self.get_pronunciation(token)
             token._.set("phonemes", phonemes)
+            tokenIdx += 1
         return doc
 
+    def get_syllables_contraction(self, word: str) -> Optional[list[str]]:
+        if word.replace("'", "").isalpha():
+            words = word.split("'")
+            syllables = []
+            for i in range(len(words)):
+                syls = self.syllable_dic.inserted(words[i].lower()).split("-")
+                if i > 0 and len(syls) > 0:
+                    syls[0] = "'" + syls[0]
+                syllables.extend(syls)
+            return syllables
+        return None
+
+    def handle_contraction(self, tokenIdx: int, doc: Doc) -> int:
+        tokens = [doc[tokenIdx]]
+        idx = tokenIdx
+        while idx < len(doc) - 1:
+            idx += 1
+            next_token = doc[idx]
+            if next_token.text.__contains__("'"):
+                tokens.append(next_token)
+            else:
+                break
+        word = "".join([t.text for t in tokens])
+        print(word)
+        if ENGLISH_CONTRACTIONS.__contains__(word.lower()):
+            new_token = FakeToken()
+            new_token.text = word
+            new_token.tag_ = ""
+            new_token.pos_ = "CONTRACTION"
+            new_token._ = FakeToken()
+            new_token._.syllables = [t.text for t in tokens]
+            new_token._.syllables_count = len(tokens)
+            cont_phones = self.get_pronunciation(new_token)
+            t: Token
+            for t in tokens:
+                t_phone = dict()
+                t_phone["whole_word"] = cont_phones["syllables"][t.text]
+                if self.syllable_grouping:
+                    t_phone["syllables"] = dict()
+                    t_phone["syllables"][t.text] = cont_phones["syllables"][t.text]
+                t._.set("phonemes", t_phone)
+            return len(tokens)
+        return 0
