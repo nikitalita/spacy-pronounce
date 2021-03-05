@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import Optional, Any
+from typing import Optional
 from spacy.tokens import Token, Doc
 from spacy.language import Language
 import pyphen
@@ -293,7 +293,6 @@ class SpacyPronounce:
             else:
                 break
         word = "".join([t.text for t in tokens])
-        print(word)
         if ENGLISH_CONTRACTIONS.__contains__(word.lower()):
             new_token = FakeToken()
             new_token.text = word
@@ -310,7 +309,7 @@ class SpacyPronounce:
                 if self.syllable_grouping:
                     t_phone["syllables"] = dict()
                     t_phone["syllables"][t.text] = cont_phones["syllables"][t.text]
-                    if t._.syllables == None:
+                    if not t._.syllables:
                         t._.syllables = [t.text]
                         t._.syllables_count = 1
                 t._.set("phonemes", t_phone)
