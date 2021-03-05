@@ -65,7 +65,8 @@ class SpacyPronounce:
                  syllable_grouping: bool = True,
                  consonant_dupe: bool = True,
                  sound_out_acronyms: bool = False,
-                 pronounce_punctuation: bool = False):
+                 pronounce_punctuation: bool = False,
+                 fix_split_contractions: bool = True):
 
         """
         nlp: an instance of spacy
@@ -83,6 +84,7 @@ class SpacyPronounce:
         self.consonant_dupe = consonant_dupe
         self.sound_out_acronyms = sound_out_acronyms
         self.pronounce_punctuation = pronounce_punctuation
+        self.fix_split_contractions = fix_split_contractions
 
         self.vowel_phonemes = ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
                                'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
@@ -106,7 +108,7 @@ class SpacyPronounce:
                 Token.set_extension("syllables_count", default=None, force=False)
 
     def get_syllables(self, word: str) -> Optional[list[str]]:
-        if word.isalpha():
+        if word.replace("'", "").isalpha():
             return self.syllable_dic.inserted(word.lower()).split("-")
         return None
 
@@ -160,13 +162,13 @@ class SpacyPronounce:
                 # If a consonant phoneme and the syllable does not contain it, skip
                 else:
                     consonant = phoneme[0].lower()
-                    if vowels == 1:
-                        if consonant == "k" and not (
-                                syl.lower().__contains__("k") or syl.lower().__contains__("c")):
-                            break
-                        elif consonant == "z" and not (
-                                syl.lower().__contains__("z") or syl.lower().__contains__("s")):
-                            break
+                    if vowels == 1 or syl.__contains__("'"):
+                        if consonant == "k":
+                            if not (syl.lower().__contains__("k") or syl.lower().__contains__("c")):
+                                break
+                        elif consonant == "z":
+                            if not(syl.lower().__contains__("s") or syl.lower().__contains__("z")):
+                                break
                         elif not syl.lower().__contains__(consonant):
                             break
 
@@ -247,9 +249,11 @@ class SpacyPronounce:
         tokenIdx = 0
         while tokenIdx < len(doc):
             token: Token = doc[tokenIdx]
-            # disabled for now
-            self.fix_contractions = True
-            if self.fix_contractions and tokenIdx < len(doc) - 1 and doc[tokenIdx+1].text.__contains__("'"):
+            # If we're not using a tokenizer that keeps the contractions together
+            if self.fix_split_contractions and tokenIdx < len(doc) - 1 \
+                    and not ENGLISH_CONTRACTIONS.__contains__(token.text.lower()) \
+                    and len(doc[tokenIdx+1].text) > 1 \
+                    and doc[tokenIdx+1].text.__contains__("'"):
                 skip = self.handle_contraction(tokenIdx, doc)
                 if skip > 0:
                     tokenIdx += skip
@@ -262,11 +266,16 @@ class SpacyPronounce:
         return doc
 
     def get_syllables_contraction(self, word: str) -> Optional[list[str]]:
+        syllables = self.get_syllables(word)
+        if syllables:
+            return syllables
         if word.replace("'", "").isalpha():
             words = word.split("'")
             syllables = []
             for i in range(len(words)):
                 syls = self.syllable_dic.inserted(words[i].lower()).split("-")
+                if len(syls) > 0 and syls[0] != '':
+                    syls.pop(0)
                 if i > 0 and len(syls) > 0:
                     syls[0] = "'" + syls[0]
                 syllables.extend(syls)
