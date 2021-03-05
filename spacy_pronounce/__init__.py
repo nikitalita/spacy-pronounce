@@ -254,7 +254,7 @@ class SpacyPronounce:
                 if skip > 0:
                     tokenIdx += skip
                     continue
-
+                # If not a valid contraction, keep going
             self.set_syllables(token)
             phonemes = self.get_pronunciation(token)
             token._.set("phonemes", phonemes)
@@ -301,6 +301,9 @@ class SpacyPronounce:
                 if self.syllable_grouping:
                     t_phone["syllables"] = dict()
                     t_phone["syllables"][t.text] = cont_phones["syllables"][t.text]
+                    if t._.syllables == None:
+                        t._.syllables = [t.text]
+                        t._.syllables_count = 1
                 t._.set("phonemes", t_phone)
             return len(tokens)
         return 0
