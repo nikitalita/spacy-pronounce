@@ -7,6 +7,7 @@ import cmudict
 from .g2p_en.expand import normalize_numbers
 from .g2p_en.g2p import G2p
 from .g2p_en.data.contractions import ENGLISH_CONTRACTIONS
+from .g2p_en.data.multiples import CMU_AMBIGUOUS_STRESS_WORDS
 
 import unicodedata
 
@@ -85,7 +86,10 @@ class SpacyPronounce:
         self.sound_out_acronyms = sound_out_acronyms
         self.pronounce_punctuation = pronounce_punctuation
         self.fix_split_contractions = fix_split_contractions
-
+        self.cmu_total = 0
+        self.cmu_not_last_count = 0
+        self.cmu_multiple_count = 0
+        self.multiples = []
         self.vowel_phonemes = ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
                                'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
                                'EH0', 'EH1', 'EH2', 'ER0', 'ER1', 'ER2', 'EY0', 'EY1',
@@ -223,19 +227,9 @@ class SpacyPronounce:
 
         tag = token.tag_
 
-        if word in self.g2p.homograph2features:  # Check homograph
-            pron1, pron2, tag1 = self.g2p.homograph2features[word]
-            if tag.startswith(tag1):
-                pron = pron1
-            else:
-                pron = pron2
-        elif word in self.cmu:  # lookup CMU dict
-            pron = self.cmu[word][0]
-        else:  # predict for oov
-            pron = self.g2p.predict(word)
-        phonemes["whole_word"] = pron
+        phonemes["whole_word"] = self.g2p.get_word_phonemes(word, tag)
         if self.syllable_grouping or token.pos_ == "CONTRACTION":
-            phonemes["syllables"] = self.group_syllables(token, pron)
+            phonemes["syllables"] = self.group_syllables(token, phonemes["whole_word"])
         return phonemes
 
     def set_syllables(self, token: Token):
@@ -251,7 +245,6 @@ class SpacyPronounce:
             token: Token = doc[tokenIdx]
             # If we're not using a tokenizer that keeps the contractions together
             if self.fix_split_contractions and tokenIdx < len(doc) - 1 \
-                    and not ENGLISH_CONTRACTIONS.__contains__(token.text.lower()) \
                     and len(doc[tokenIdx+1].text) > 1 \
                     and doc[tokenIdx+1].text.__contains__("'"):
                 skip = self.handle_contraction(tokenIdx, doc)
@@ -263,6 +256,11 @@ class SpacyPronounce:
             phonemes = self.get_pronunciation(token)
             token._.set("phonemes", phonemes)
             tokenIdx += 1
+        print("Total CMU lookups: " + str(self.cmu_total))
+        print("Total not last: " + str(self.cmu_not_last_count))
+        print("Total multiples: " + str(self.cmu_multiple_count))
+        print("Multiples:")
+        print(self.multiples)
         return doc
 
     def get_syllables_contraction(self, word: str) -> Optional[list[str]]:

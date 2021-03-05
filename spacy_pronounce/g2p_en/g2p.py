@@ -4,43 +4,35 @@
 By kyubyong park(kbpark.linguist@gmail.com) and Jongseok Kim(https://github.com/ozmig77)
 https://www.github.com/kyubyong/g2p
 '''
+from typing import Optional
+
 import cmudict
 import numpy as np
 import codecs
-import re
 import os
-import unicodedata
-from builtins import str as unicode
-from .expand import normalize_numbers
+from .data.multiples import CMU_AMBIGUOUS_STRESS_WORDS
 
 dirname = os.path.dirname(__file__)
+
 
 def construct_homograph_dictionary():
     f = os.path.join(dirname, 'data', 'homographs.en')
     homograph2features = dict()
     for line in codecs.open(f, 'r', 'utf8').read().splitlines():
-        if line.startswith("#"): continue # comment
+        if line.startswith("#"): continue  # comment
         headword, pron1, pron2, pos1 = line.strip().split("|")
         homograph2features[headword.lower()] = (pron1.split(), pron2.split(), pos1)
     return homograph2features
 
-# def segment(text):
-#     '''
-#     Splits text into `tokens`.
-#     :param text: A string.
-#     :return: A list of tokens (string).
-#     '''
-#     print(text)
-#     text = re.sub('([.,?!]( |$))', r' \1', text)
-#     print(text)
-#     return text.split()
 
 class G2p(object):
     def __init__(self):
         super().__init__()
         self.graphemes = ["<pad>", "<unk>", "</s>"] + list("abcdefghijklmnopqrstuvwxyz")
-        self.phonemes = ["<pad>", "<unk>", "<s>", "</s>"] + ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
-                                                             'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2', 'B', 'CH', 'D', 'DH',
+        self.phonemes = ["<pad>", "<unk>", "<s>", "</s>"] + ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1',
+                                                             'AH2', 'AO0',
+                                                             'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
+                                                             'B', 'CH', 'D', 'DH',
                                                              'EH0', 'EH1', 'EH2', 'ER0', 'ER1', 'ER2', 'EY0', 'EY1',
                                                              'EY2', 'F', 'G', 'HH',
                                                              'IH0', 'IH1', 'IH2', 'IY0', 'IY1', 'IY2', 'JH', 'K', 'L',
@@ -53,6 +45,7 @@ class G2p(object):
 
         self.p2idx = {p: idx for idx, p in enumerate(self.phonemes)}
         self.idx2p = {idx: p for idx, p in enumerate(self.phonemes)}
+        self.cmu = cmudict.dict()
 
         self.load_variables()
         self.homograph2features = construct_homograph_dictionary()
@@ -131,51 +124,39 @@ class G2p(object):
         preds = [self.idx2p.get(idx, "<unk>") for idx in preds]
         return preds
 
-    def __call__(self, text):
-        pass
-        # preprocessing
-        # text = unicode(text)
-        # text = normalize_numbers(text)
-        # text = ''.join(char for char in unicodedata.normalize('NFD', text)
-        #                if unicodedata.category(char) != 'Mn')  # Strip accents
-        # text = text.lower()
-        # text = re.sub("[^ a-z'.,?!\-]", "", text)
-        # text = text.replace("i.e.", "that is")
-        # text = text.replace("e.g.", "for example")
-        #
-        # # tokenization
-        # words = word_tokenize(text)
-        # tokens = pos_tag(words)  # tuples of (word, tag)
-        #
-        # # steps
-        # prons = []
-        # for word, pos in tokens:
-        #     if re.search("[a-z]", word) is None:
-        #         pron = [word]
-        #
-        #     elif word in self.homograph2features:  # Check homograph
-        #         pron1, pron2, pos1 = self.homograph2features[word]
-        #         if pos.startswith(pos1):
-        #             pron = pron1
-        #         else:
-        #             pron = pron2
-        #     elif word in self.cmu:  # lookup CMU dict
-        #         pron = self.cmu[word][0]
-        #     else: # predict for oov
-        #         pron = self.predict(word)
-        #
-        #     prons.extend(pron)
-        #     prons.extend([" "])
-        #
-        # return prons[:-1]
+    def get_word_phonemes(self, word: str, pos: Optional[str]) -> list[str]:
+        if pos and word in self.homograph2features:  # Check homograph
+            pron1, pron2, pos1 = self.homograph2features[word]
+            if pos.startswith(pos1):
+                return pron1
+            else:
+                pron = pron2
+        elif word in self.cmu:  # lookup CMU dict
+            return self.cmu_lookup(word)
+        else:  # predict for oov
+            return self.predict(word)
 
-if __name__ == '__main__':
-    texts = ["I have $250 in my pocket.", # number -> spell-out
-             "popular pets, e.g. cats and dogs", # e.g. -> for example
-             "I refuse to collect the refuse around here.", # homograph
-             "I'm an activationist."] # newly coined word
-    g2p = G2p()
-    for text in texts:
-        out = g2p(text)
-        print(out)
+    def cmu_lookup(self, word: str) -> list[str]:
+        cmu_prons = self.cmu[word]
+        # if CMU dictionary has more than one pronunciation, use predict to check which one is likely correct
 
+        # If a word has multiple ambiguous pronunciations with the same vowels but different stresses,
+        # try predicting with the stresses attached first
+        if CMU_AMBIGUOUS_STRESS_WORDS.__contains__(word):
+            pre_pron = self.predict(word)
+            for cmu_pron in cmu_prons:
+                if pre_pron == cmu_pron:
+                    return cmu_pron
+        # Otherwise, strip the stesses
+        if len(cmu_prons) > 1:
+            # remove stresses
+            pre_pron = [''.join(i for i in p if not i.isdigit()) for p in self.predict(word)]
+            for idx in range(len(cmu_prons)):
+                # remove stresses
+                cmu_pron = [''.join(i for i in p if not i.isdigit()) for p in cmu_prons[idx]]
+                if pre_pron == cmu_pron:
+                    return cmu_prons[idx]
+
+        # If there's only one or we failed to predict any of the pronunciations in the CMU dict,
+        # just return the last one
+        return cmu_prons[-1]
