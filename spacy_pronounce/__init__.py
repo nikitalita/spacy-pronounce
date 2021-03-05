@@ -9,18 +9,32 @@ from .g2p_en.g2p import G2p
 import unicodedata
 
 
-@Language.factory("graphemes",
-                  assigns=["token._.graphemes"],
-                  default_config={"lang": None, "consonant_dupe": True},
-                  requires=["token.text", "token.pos"]
+@Language.factory("phonemes",
+                  assigns=["token._.phonemes", "token._.syllables", "token._.syllables_count"],
+                  default_config={
+                      "lang": None,
+                      "syllable_grouping": True,
+                      "consonant_dupe": True,
+                      "sound_out_acronyms": False,
+                      "pronounce_punctuation": False},
+                  requires=["token.text", "token.pos"],
+
                   )
 def make_spacy_pronounce(
         nlp: Language,
         name: str,
         lang: Optional[str],
-        consonant_dupe: bool
+        syllable_grouping: bool,
+        consonant_dupe: bool,
+        sound_out_acronyms: bool,
+        pronounce_punctuation: bool
 ):
-    return SpacyPronounce(nlp, name, lang=lang, consonant_dupe=consonant_dupe)
+    return SpacyPronounce(nlp, name,
+                          lang=lang,
+                          syllable_grouping=syllable_grouping,
+                          consonant_dupe=consonant_dupe,
+                          sound_out_acronyms=sound_out_acronyms,
+                          pronounce_punctuation=pronounce_punctuation)
 
 
 class Graphemes:
@@ -35,21 +49,30 @@ class Graphemes:
 
 
 class SpacyPronounce:
-    def __init__(self, nlp: Language, name: str = "graphemes", lang: Optional[str] = None, consonant_dupe: bool = True):
+    def __init__(self, nlp: Language, name: str = "phonemes",
+                 lang: Optional[str] = None,
+                 syllable_grouping: bool = True,
+                 consonant_dupe: bool = True,
+                 sound_out_acronyms: bool = False,
+                 pronounce_punctuation: bool = False):
 
         """
         nlp: an instance of spacy
-        name: defaults to "graphemes".
+        name: defaults to "phonemes".
         lang: Optional, can be any format like : ["en", "en-us", "en_us", "en-US", ...]
               By default, it uses the language code of the model loaded.
         usage:
             nlp = spacy.load("en_core_web_sm")
-            nlp.add_pipe("graphemes", after="tagger", config={"lang": "en_US"})
+            nlp.add_pipe("phonemes", after="tagger", config={"lang": "en_US"})
         """
         self.name = name
         self.g2p = G2p()
         self.cmu = cmudict.dict()
+        self.syllable_grouping = syllable_grouping
         self.consonant_dupe = consonant_dupe
+        self.sound_out_acronyms = sound_out_acronyms
+        self.pronounce_punctuation = pronounce_punctuation
+
         self.vowel_phonemes = ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
                                'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
                                'EH0', 'EH1', 'EH2', 'ER0', 'ER1', 'ER2', 'EY0', 'EY1',
@@ -64,25 +87,20 @@ class SpacyPronounce:
         if lang != "en":
             raise Exception("spacy_pronounce is only currently implemented for english")
 
-        try:
+        Token.set_extension("phonemes", default=None, force=True)
+        if self.syllable_grouping:
             self.syllable_dic = pyphen.Pyphen(lang=lang)
-        except KeyError:
-            # Don't do syllables
-            pass
+            if not Token.has_extension("syllables"):
+                Token.set_extension("syllables", default=None, force=False)
+                Token.set_extension("syllables_count", default=None, force=False)
 
-        Token.set_extension("graphemes", default=None, force=True)
-        Token.set_extension("syllables", default=None, force=False)
-        Token.set_extension("syllables_count", default=None, force=False)
-
-    def syllables(self, word: str) -> Optional[list[str]]:
-        if self.is_acronym(word):
-            return [ch for ch in word]
+    def get_syllables(self, word: str) -> Optional[list[str]]:
         if word.isalpha():
             return self.syllable_dic.inserted(word.lower()).split("-")
         return None
 
     def is_acronym(self, word: str) -> bool:
-        return word.strip('.').isupper()
+        return len(word) != 1 and word.strip('.').isupper()
 
     def normalize_word(self, word: str) -> str:
         word = normalize_numbers(word)
@@ -101,22 +119,98 @@ class SpacyPronounce:
         word = word.lower()
         return word
 
+    def group_syllables(self, token: Token, pron):
+        sylprons = dict()
+        if not token._.syllables:
+            sylprons[token.text] = pron
+            return sylprons
+        if token._.syllables_count == 1:
+            sylprons[token._.syllables[0]] = pron
+            return sylprons
+        pronidx = 0
+        syllables: Optional[List[str]] = token._.syllables
+
+        for sylidx in range(len(syllables)):
+            syl = syllables[sylidx]
+            vowels = 0
+            sylpron = []
+            while pronidx < len(pron):
+                phoneme = pron[pronidx]
+                syl_first_letter = syl[0].lower()
+                if syl_first_letter == "'" and len(syl) > 1:
+                    syl_first_letter = syl[1].lower()
+                phoneme_first_letter = phoneme[0].lower()
+
+                if self.vowel_phonemes.__contains__(phoneme):
+                    vowels += 1
+
+                # If a consonant phoneme and the syllable does not contain it, skip
+                else:
+                    consonant = phoneme[0].lower()
+                    if vowels == 1:
+                        if consonant == "k" and not (
+                                syl.lower().__contains__("k") or syl.lower().__contains__("c")):
+                            break
+                        elif consonant == "z" and not (
+                                syl.lower().__contains__("z") or syl.lower().__contains__("s")):
+                            break
+                        elif not syl.lower().__contains__(consonant):
+                            break
+
+                # get the consonant phoneme from the last syllable if necessary
+                if self.consonant_dupe and len(sylpron) == 0 and sylidx > 0 \
+                        and syl_first_letter != phoneme_first_letter \
+                        and self.consonants.__contains__(syl_first_letter):
+                    last_pron = sylprons[syllables[sylidx - 1]]
+                    last_phoneme = last_pron[len(last_pron) - 1]
+                    if last_phoneme[0].lower() == syl_first_letter:
+                        sylpron.append(last_phoneme)
+
+                if vowels > 1:
+                    break
+                sylpron.append(phoneme)
+                pronidx += 1
+            # append the rest to the last syllable if we missed some
+            if syllables.index(syl) == len(syllables) - 1 and pronidx < len(pron):
+                length = len(pron) - pronidx
+                for i in range(pronidx, pronidx + length):
+                    sylpron.append(pron[i])
+            sylprons[syl] = sylpron
+        return sylprons
+
     def get_pronounciation(self, token: Token) -> object:
-        graphemes = dict()
-        graphemes["whole_word"] = None
-        graphemes["syllables"] = None
 
-        # normalize text for pronunciation checking
-        word = self.normalize_word(token.text)
-        print(word)
+        phonemes = dict()
+        phonemes["whole_word"] = None
+        phonemes["syllables"] = None
 
-        pos = token.tag_
+        # pronunciation checking
+        if token.pos_ == "PUNCT":
+            if self.pronounce_punctuation:
+                word = token.text
+            else:
+                return phonemes
+        else:
+            # normalize text for pronunciation checking
+            word = self.normalize_word(token.text)
 
         if word == "":
-            return graphemes
+            return phonemes
+
+        # if pronounce acronyms
+        if self.sound_out_acronyms and self.is_acronym(token.text):
+            word = '.'.join([ch for ch in word])
+            word += '.'
+            if self.syllable_grouping:
+                acr_syls = [ch for ch in token.text.strip('.')]
+                token._.set("syllables", acr_syls)
+                token._.set("syllables_count", len(acr_syls))
+
+        tag = token.tag_
+
         if word in self.g2p.homograph2features:  # Check homograph
-            pron1, pron2, pos1 = self.g2p.homograph2features[word]
-            if pos.startswith(pos1):
+            pron1, pron2, tag1 = self.g2p.homograph2features[word]
+            if tag.startswith(tag1):
                 pron = pron1
             else:
                 pron = pron2
@@ -124,74 +218,25 @@ class SpacyPronounce:
             pron = self.cmu[word][0]
         else:  # predict for oov
             pron = self.g2p.predict(word)
-        graphemes["text"] = token.text
-        graphemes["syllable_obj"] = token._.syllables
-        graphemes["whole_word"] = pron
-        if token._.syllables:
-            graphemes["syllables"] = dict()
-            if token._.syllables_count == 1:
-                graphemes["syllables"][token.text] = pron
-            else:
-                sylprons = dict()
-                pronidx = 0
-                syllables: Optional[List[str]] = token._.syllables
+        phonemes["whole_word"] = pron
+        if self.syllable_grouping:
+            phonemes["syllables"] = self.group_syllables(token, pron)
+        return phonemes
 
-                for sylidx in range(len(syllables)):
-                    syl = syllables[sylidx]
-                    vowels = 0
-                    sylpron = []
-                    while pronidx < len(pron):
-                        phoneme = pron[pronidx]
-                        syl_first_letter = syl[0].lower()
-                        phoneme_first_letter = phoneme[0].lower()
-
-                        if self.vowel_phonemes.__contains__(phoneme):
-                            vowels += 1
-
-                        # If a consonant phoneme and the syllable does not contain it, skip
-                        else:
-                            consonant = phoneme[0].lower()
-                            if vowels == 1:
-                                if consonant == "k" and not (syl.lower().__contains__("k") or syl.lower().__contains__("c")):
-                                    break
-                                elif consonant == "z" and not (syl.lower().__contains__("z") or syl.lower().__contains__("s")):
-                                    break
-                                elif not syl.lower().__contains__(consonant):
-                                    break
-
-                        # get the consonant phoneme from the last syllable if necessary
-                        if self.consonant_dupe and len(sylpron) == 0 and sylidx > 0 \
-                                and syl_first_letter != phoneme_first_letter \
-                                and self.consonants.__contains__(syl_first_letter):
-                            last_pron = sylprons[syllables[sylidx - 1]]
-                            last_phoneme = last_pron[len(last_pron) - 1]
-                            if last_phoneme[0].lower() == syl_first_letter:
-                                sylpron.append(last_phoneme)
-
-                        if vowels > 1:
-                            break
-                        sylpron.append(phoneme)
-                        pronidx += 1
-                    # append the rest to the last syllable if we missed some
-                    if syllables.index(syl) == len(syllables) - 1 and pronidx < len(pron):
-                        length = len(pron) - pronidx;
-                        for i in range(pronidx, pronidx + length):
-                            sylpron.append(pron[i])
-                    sylprons[syl] = sylpron
-
-                graphemes["syllables"] = sylprons
-
-        return graphemes
+    def set_syllables(self, token: Token):
+        if self.syllable_grouping and hasattr(token._, 'syllables') and not token._.syllables:
+            syllables = self.get_syllables(token.text)
+            if syllables:
+                token._.set("syllables", syllables)
+                token._.set("syllables_count", len(syllables))
 
     def __call__(self, doc: Doc):
-        token: Token
-        for token in doc:
-            if hasattr(token._, 'syllables') and not token._.syllables:
-                syllables = self.syllables(token.text)
-                if syllables:
-                    token._.set("syllables", syllables)
-                    token._.set("syllables_count", len(syllables))
-            graphemes = self.get_pronounciation(token)
-            token._.set("graphemes", graphemes)
+        for tokenIdx in range(len(doc)):
+            token: Token
+            token = doc[tokenIdx]
 
+            self.set_syllables(token)
+            phonemes = self.get_pronounciation(token)
+            token._.set("phonemes", phonemes)
         return doc
+
