@@ -86,10 +86,6 @@ class SpacyPronounce:
         self.sound_out_acronyms = sound_out_acronyms
         self.pronounce_punctuation = pronounce_punctuation
         self.fix_split_contractions = fix_split_contractions
-        self.cmu_total = 0
-        self.cmu_not_last_count = 0
-        self.cmu_multiple_count = 0
-        self.multiples = []
         self.vowel_phonemes = ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
                                'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
                                'EH0', 'EH1', 'EH2', 'ER0', 'ER1', 'ER2', 'EY0', 'EY1',
@@ -256,11 +252,6 @@ class SpacyPronounce:
             phonemes = self.get_pronunciation(token)
             token._.set("phonemes", phonemes)
             tokenIdx += 1
-        print("Total CMU lookups: " + str(self.cmu_total))
-        print("Total not last: " + str(self.cmu_not_last_count))
-        print("Total multiples: " + str(self.cmu_multiple_count))
-        print("Multiples:")
-        print(self.multiples)
         return doc
 
     def get_syllables_contraction(self, word: str) -> Optional[list[str]]:
