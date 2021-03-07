@@ -124,17 +124,20 @@ class G2p(object):
         preds = [self.idx2p.get(idx, "<unk>") for idx in preds]
         return preds
 
-    def get_word_phonemes(self, word: str, pos: Optional[str]) -> list[str]:
-        if pos and word in self.homograph2features:  # Check homograph
+    def get_word_phonemes(self, word: str, pos: Optional[str] = None) -> list[str]:
+
+        if pos and (pos and word in self.homograph2features):  # Check homograph
             pron1, pron2, pos1 = self.homograph2features[word]
             if pos.startswith(pos1):
                 return pron1
             else:
                 return pron2
-        elif word in self.cmu:  # lookup CMU dict
+
+        if word in self.cmu:  # lookup CMU dict
             return self.cmu_lookup(word)
-        else:  # predict for oov
-            return self.predict(word)
+
+        # predict for oov
+        return self.predict(word)
 
     def cmu_lookup(self, word: str) -> list[str]:
         cmu_prons = self.cmu[word]

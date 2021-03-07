@@ -4,10 +4,13 @@ from spacy.tokens import Token, Doc
 from spacy.language import Language
 import pyphen
 import cmudict
+
+from eng_to_ipa.eng_to_ipa import cmu_syllable_count, cmu_phones_syllable_count
 from .g2p_en.expand import normalize_numbers
 from .g2p_en.g2p import G2p
 from .g2p_en.data.contractions import ENGLISH_CONTRACTIONS
 from .g2p_en.data.multiples import CMU_AMBIGUOUS_STRESS_WORDS
+from contractions import contractions_dict
 
 import unicodedata
 
@@ -45,25 +48,6 @@ def make_spacy_pronounce(
                           )
 
 
-class FakeUnderscore(object):
-    syllables: list[str]
-    syllables_count: int
-
-
-class FakeToken(object):
-    text: str
-    pos_: str
-    tag_: str
-    _: FakeUnderscore
-
-    def __init__(self):
-        self.text = ""
-        self.pos_ = ""
-        self.tag_ = ""
-        self._ = FakeUnderscore()
-        pass
-
-
 class SpacyPronounce:
     def __init__(self, nlp: Language, name: str = "phonemes",
                  lang: Optional[str] = None,
@@ -99,6 +83,7 @@ class SpacyPronounce:
                                'UH0', 'UH1', 'UH2', 'UW',
                                'UW0', 'UW1', 'UW2']
         self.consonants = "bcdfghjklmnpqrstvwxyz"
+        self.contractions = contractions_dict.keys()
         lang = lang or nlp.lang
         lang, *country_code = lang.lower().replace("-", "_").split("_")
         if lang != "en":
@@ -145,12 +130,52 @@ class SpacyPronounce:
                 return i
         return -1
 
-    def group_syllables(self, syllables: list[str], pron):
+    @staticmethod
+    def should_break_to_next_syllable(self, curr_phone: str, next_phone: Optional[str], syl_has_vowel: bool) -> bool:
+        if not syl_has_vowel:
+            return False
+        elif curr_phone in self.vowel_phonemes:
+            return True
+        elif next_phone:
+            if next_phone in self.vowel_phonemes:
+                return True
+        return False
+
+    @staticmethod
+    def group_phone_syllables(self, phones: list[str]) -> list[list[str]]:
+        groups = list[list[str]]()
+        group = list[str]()
+        has_vowel = False
+        for i, phone in enumerate(phones):
+            next_phone = None
+            if i + 1 < len(phones):
+                next_phone = phones[i + 1]
+            if self.should_break_to_next_syllable(phone, next_phone, has_vowel):
+                groups.append(group)
+                group = list[str]().append(phone)
+                has_vowel = False
+            else:
+                group.append(phone)
+
+            if phone in self.vowel_phonemes:
+                has_vowel = True
+        return groups
+
+    def group_syllables(self, word: str, pron: list[str], syllables: Optional[list[str]]):
+
         sylprons = dict[str]()
-        if len(syllables) == 1:
+        stripped_phones = [''.join(i.lower() for i in p if not i.isdigit()) for p in pron]
+        phone_syl_count = cmu_phones_syllable_count(stripped_phones)
+
+        if syllables and len(syllables) == 1 and len(syllables) == phone_syl_count:
             sylprons[syllables[0]] = pron
             return sylprons
         pronidx = 0
+
+        # phone_syl_groups = self.group_phone_syllables(pron)
+        # Pyphen failed to syllablize properly, we need to redo it
+        # if not syllables or len(syllables) != phone_syl_count:
+        #    pass
 
         for sylidx in range(len(syllables)):
             syl = syllables[sylidx]
@@ -158,19 +183,25 @@ class SpacyPronounce:
             sylpron = []
             while pronidx < len(pron):
                 phoneme = pron[pronidx]
+                next_phoneme = None
+                if (pronidx < len(pron) - 1):
+                    next_phoneme = pron[pronidx+1]
                 syl_first_letter = syl[0].lower()
                 if syl_first_letter == "'" and len(syl) > 1:
                     syl_first_letter = syl[1].lower()
                 phoneme_first_letter = phoneme[0].lower()
 
                 if phoneme in self.vowel_phonemes:
-                    if vowels > 0:
-                        break
                     vowels += 1
+                    if vowels > 1:
+                        break
+
+                elif not self.consonant_dupe and vowels == 1 and (next_phoneme in self.vowel_phonemes):
+                    break
                 # If a consonant phoneme and the syllable does not contain it, skip
-                else:
+                elif vowels == 1:
                     vowel_idx = self.find_first_vowel(syl)
-                    if vowels == 1 or "'" in syl and self.find_first_vowel(syl) < len(syl) - 2:
+                    if "'" in syl and self.find_first_vowel(syl) < len(syl) - 2:
                         suffix = syl[vowel_idx + 1: len(syl)].lower()
                         if phoneme_first_letter == "k":
                             if not ("k" or "c" in suffix):
@@ -206,7 +237,7 @@ class SpacyPronounce:
         phonemes["whole_word"] = None
         phonemes["syllables"] = None
 
-         # if pronounce acronyms
+        # if pronounce acronyms
         if self.sound_out_acronyms and self.is_acronym(token.text):
             word = '.'.join([ch for ch in self.normalize_word(token.text)])
             word += '.'
@@ -225,18 +256,17 @@ class SpacyPronounce:
             # normalize text for pronunciation checking
             word = self.normalize_word(token.text)
 
-
         if word == "":
             return phonemes
 
         tag = token.tag_
 
         phonemes["whole_word"] = self.g2p.get_word_phonemes(word, tag)
-        if (self.syllable_grouping or token.pos_ == "CONTRACTION"):
+        if self.syllable_grouping or token.pos_ == "CONTRACTION":
             if not token._.syllables:
                 phonemes["syllables"][token.text.lower()] = phonemes["whole_word"]
             else:
-                phonemes["syllables"] = self.group_syllables(token._.syllables, phonemes["whole_word"])
+                phonemes["syllables"] = self.group_syllables("", phonemes["whole_word"], token._.syllables)
         return phonemes
 
     def set_syllables(self, token: Token):
@@ -292,25 +322,22 @@ class SpacyPronounce:
                 tokens.append(next_token)
             else:
                 break
-        word = "".join([t.text for t in tokens])
-        if word.lower() in ENGLISH_CONTRACTIONS:
-            new_token = FakeToken()
-            new_token.text = word
-            new_token.tag_ = ""
-            new_token.pos_ = "CONTRACTION"
-            new_token._.syllables = [t.text for t in tokens]
-            new_token._.syllables_count = len(tokens)
-            cont_phones = self.get_token_phonemes(new_token)
+        whole_word = self.normalize_word("".join([t.text for t in tokens]))
+        if whole_word in self.contractions:
+            contraction_phones = dict[str]()
+            syllables = [t.text for t in tokens]
+            contraction_phones["whole_word"] = self.g2p.get_word_phonemes(whole_word)
+            contraction_phones["syllables"] = self.group_syllables("", contraction_phones["whole_word"], syllables)
             t: Token
             for t in tokens:
                 t_phone = dict()
-                t_phone["whole_word"] = cont_phones["syllables"][t.text]
+                t_phone["whole_word"] = contraction_phones["syllables"][t.text]
                 if self.syllable_grouping:
                     t_phone["syllables"] = dict()
-                    t_phone["syllables"][t.text] = cont_phones["syllables"][t.text]
+                    t_phone["syllables"][t.text] = contraction_phones["syllables"][t.text]
                     if not t._.syllables:
-                        t._.syllables = [t.text]
-                        t._.syllables_count = 1
+                        t._.set("syllables", [t.text])
+                        t._.set("syllables_count", 1)
                 t._.set("phonemes", t_phone)
             return len(tokens)
         return 0

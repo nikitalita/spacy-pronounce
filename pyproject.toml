@@ -30,6 +30,7 @@ spacy = "^3.0.3"
 pyphen = "^0.10.0"
 cmudict = "^0.4.5"
 inflect = "^5.3.0"
+contractions = "^0.0.48"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.3.5"
