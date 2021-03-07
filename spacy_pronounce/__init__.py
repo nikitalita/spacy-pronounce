@@ -82,6 +82,7 @@ class SpacyPronounce:
                                'OW2', 'OY0', 'OY1', 'OY2',
                                'UH0', 'UH1', 'UH2', 'UW',
                                'UW0', 'UW1', 'UW2']
+        self.affricate_phonemes = ['CH', 'JH']
         self.consonants = "bcdfghjklmnpqrstvwxyz"
         self.contractions = contractions_dict.keys()
         lang = lang or nlp.lang
@@ -181,11 +182,17 @@ class SpacyPronounce:
             syl = syllables[sylidx]
             vowels = 0
             sylpron = []
+            next_syl = None
+            if sylidx < len(syllables) - 1:
+                next_syl = syllables[sylidx+1]
             while pronidx < len(pron):
                 phoneme = pron[pronidx]
                 next_phoneme = None
+                prev_phoneme = None
                 if (pronidx < len(pron) - 1):
                     next_phoneme = pron[pronidx+1]
+                if (pronidx > 0):
+                    prev_phoneme = pron[pronidx-1]
                 syl_first_letter = syl[0].lower()
                 if syl_first_letter == "'" and len(syl) > 1:
                     syl_first_letter = syl[1].lower()
@@ -195,22 +202,35 @@ class SpacyPronounce:
                     vowels += 1
                     if vowels > 1:
                         break
-
-                elif not self.consonant_dupe and vowels == 1 and (next_phoneme in self.vowel_phonemes):
-                    break
                 # If a consonant phoneme and the syllable does not contain it, skip
                 elif vowels == 1:
-                    vowel_idx = self.find_first_vowel(syl)
-                    if "'" in syl and self.find_first_vowel(syl) < len(syl) - 2:
-                        suffix = syl[vowel_idx + 1: len(syl)].lower()
-                        if phoneme_first_letter == "k":
-                            if not ("k" or "c" in suffix):
-                                break
-                        elif phoneme_first_letter == "z":
-                            if not ("s" or "z" in suffix):
-                                break
-                        elif phoneme_first_letter not in suffix:
+
+                    if next_phoneme and next_phoneme in self.vowel_phonemes:
+                        # If we're not duplicating consonants, don't bother
+                        if not self.consonant_dupe:
                             break
+                        # If the previous phoneme was also a consonant, the two consonants have different sounds,
+                        # don't dupe
+                        if prev_phoneme not in self.vowel_phonemes:
+                            break
+                        if next_syl:
+                            if syl[-1] != next_syl[0] or phoneme in self.affricate_phonemes:
+                                break
+
+                        # If consonant dupe...
+                        # vowel_idx = self.find_first_vowel(syl)
+                        # if "'" in syl and self.find_first_vowel(syl) < len(syl) - 2:
+                        #     suffix = syl[vowel_idx + 1: len(syl)].lower()
+                        #     if phoneme_first_letter == "k":
+                        #         if not ("k" or "c" in suffix):
+                        #             break
+                        #     elif phoneme_first_letter == "z":
+                        #         if not ("s" or "z" in suffix):
+                        #             break
+                        #     elif phoneme_first_letter not in suffix:
+                        #         break
+                        # else:
+                        #     break
 
                 # get the consonant phoneme from the last syllable if necessary
                 if self.consonant_dupe and len(sylpron) == 0 and sylidx > 0 \
@@ -264,6 +284,7 @@ class SpacyPronounce:
         phonemes["whole_word"] = self.g2p.get_word_phonemes(word, tag)
         if self.syllable_grouping or token.pos_ == "CONTRACTION":
             if not token._.syllables:
+                phonemes["syllables"] = dict[str]()
                 phonemes["syllables"][token.text.lower()] = phonemes["whole_word"]
             else:
                 phonemes["syllables"] = self.group_syllables("", phonemes["whole_word"], token._.syllables)
