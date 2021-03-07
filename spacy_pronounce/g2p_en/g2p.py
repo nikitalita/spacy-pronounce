@@ -130,7 +130,7 @@ class G2p(object):
             if pos.startswith(pos1):
                 return pron1
             else:
-                pron = pron2
+                return pron2
         elif word in self.cmu:  # lookup CMU dict
             return self.cmu_lookup(word)
         else:  # predict for oov
@@ -142,7 +142,7 @@ class G2p(object):
 
         # If a word has multiple ambiguous pronunciations with the same vowels but different stresses,
         # try predicting with the stresses attached first
-        if CMU_AMBIGUOUS_STRESS_WORDS.__contains__(word):
+        if word in CMU_AMBIGUOUS_STRESS_WORDS:
             pre_pron = self.predict(word)
             for cmu_pron in cmu_prons:
                 if pre_pron == cmu_pron:
