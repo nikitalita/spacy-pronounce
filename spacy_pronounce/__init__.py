@@ -5,7 +5,7 @@ from spacy.language import Language
 import pyphen
 import cmudict
 
-from eng_to_ipa.eng_to_ipa import cmu_syllable_count, cmu_phones_syllable_count
+from eng_to_ipa import cmu_syllable_count
 from .g2p_en.expand import normalize_numbers
 from .g2p_en.g2p import G2p
 from .g2p_en.data.contractions import ENGLISH_CONTRACTIONS
@@ -74,6 +74,7 @@ class SpacyPronounce:
         self.sound_out_acronyms = sound_out_acronyms
         self.pronounce_punctuation = pronounce_punctuation
         self.fix_split_contractions = fix_split_contractions
+        self.hiatus = [["er", "iy"], ["iy", "ow"], ["uw", "ow"], ["iy", "ah"], ["iy", "ey"], ["uw", "eh"], ["er", "eh"]]
         self.vowel_phonemes = ['AA0', 'AA1', 'AA2', 'AE0', 'AE1', 'AE2', 'AH0', 'AH1', 'AH2', 'AO0',
                                'AO1', 'AO2', 'AW0', 'AW1', 'AW2', 'AY0', 'AY1', 'AY2',
                                'EH0', 'EH1', 'EH2', 'ER0', 'ER1', 'ER2', 'EY0', 'EY1',
@@ -92,7 +93,9 @@ class SpacyPronounce:
 
         Token.set_extension("phonemes", default=None, force=True)
         if self.syllable_grouping:
-            self.syllable_dic = pyphen.Pyphen(lang=lang)
+            if len(country_code) == 0:
+                country_code.append("US")
+            self.syllable_dic = pyphen.Pyphen(lang=lang +'-' + country_code[0])
             if not Token.has_extension("syllables"):
                 Token.set_extension("syllables", default=None, force=False)
                 Token.set_extension("syllables_count", default=None, force=False)
@@ -162,11 +165,16 @@ class SpacyPronounce:
                 has_vowel = True
         return groups
 
+    @staticmethod
+    def strip_stresses_from_phones(phones: list[str]) -> list[str]:
+        return [''.join(i.lower() for i in p if not i.isdigit()) for p in phones]
+
+
     def group_syllables(self, word: str, pron: list[str], syllables: Optional[list[str]]):
 
         sylprons = dict[str]()
-        stripped_phones = [''.join(i.lower() for i in p if not i.isdigit()) for p in pron]
-        phone_syl_count = cmu_phones_syllable_count(stripped_phones)
+        stripped_phones = self.strip_stresses_from_phones(pron)
+        phone_syl_count = cmu_syllable_count(' '.join(stripped_phones))
 
         if syllables and len(syllables) == 1 and len(syllables) == phone_syl_count:
             sylprons[syllables[0]] = pron
